@@ -8,6 +8,7 @@ import pytest
 
 from crewai import Agent, Task
 from crewai.lite_agent import LiteAgent
+from crewai.llm import LLM
 from crewai.utilities.guardrail import (
     serialize_guardrail_for_json,
     serialize_guardrails_for_json,
@@ -128,3 +129,67 @@ def test_lite_agent_model_dump_json_with_callable_guardrail() -> None:
     with pytest.warns(UserWarning, match="cannot be JSON-serialized"):
         dumped = agent.model_dump(mode="json")
     assert dumped["guardrail"] is None
+
+
+# --- guardrail_llm serialization (issue #7764) ---
+
+
+def test_agent_guardrail_llm_serializes_as_none_when_unset() -> None:
+    agent = Agent(
+        role="r",
+        goal="g",
+        backstory="b",
+        guardrail="output must be non-empty",
+    )
+    dumped = agent.model_dump(mode="json")
+    assert dumped["guardrail_llm"] is None
+
+
+def test_agent_guardrail_llm_round_trips_through_json() -> None:
+    agent = Agent(
+        role="r",
+        goal="g",
+        backstory="b",
+        llm=LLM(model="gpt-4o"),
+        guardrail="output must be non-empty",
+        guardrail_llm=LLM(model="gpt-4o-mini"),
+    )
+    dumped = agent.model_dump(mode="json")
+    assert dumped["guardrail_llm"]["model"] == "gpt-4o-mini"
+
+    restored = Agent.model_validate(dumped, context={"from_checkpoint": True})
+    assert restored.guardrail_llm is not None
+    assert restored.guardrail_llm.model == "gpt-4o-mini"
+    assert restored.llm is not None
+    assert restored.llm.model == "gpt-4o"
+
+
+def test_task_guardrail_llm_round_trips_through_json() -> None:
+    agent = Agent(role="r", goal="g", backstory="b", llm=LLM(model="gpt-4o"))
+    task = Task(
+        description="Do the thing",
+        expected_output="A thing",
+        agent=agent,
+        guardrail="output must be non-empty",
+        guardrail_llm=LLM(model="gpt-4o-mini"),
+    )
+    dumped = task.model_dump(mode="json", exclude={"id"})
+    assert dumped["guardrail_llm"]["model"] == "gpt-4o-mini"
+
+    if isinstance(dumped.get("agent"), dict):
+        dumped["agent"].pop("id", None)
+    restored = Task.model_validate(dumped)
+    assert restored.guardrail_llm is not None
+    assert restored.guardrail_llm.model == "gpt-4o-mini"
+
+
+def test_task_guardrail_llm_serializes_as_none_when_unset() -> None:
+    agent = Agent(role="r", goal="g", backstory="b")
+    task = Task(
+        description="Do the thing",
+        expected_output="A thing",
+        agent=agent,
+        guardrail="output must be non-empty",
+    )
+    dumped = task.model_dump(mode="json")
+    assert dumped["guardrail_llm"] is None

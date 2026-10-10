@@ -2107,7 +2107,10 @@ class Agent(BaseAgent):
 
             guardrail_callable = cast(
                 GuardrailCallable,
-                LLMGuardrail(description=self.guardrail, llm=cast(BaseLLM, self.llm)),
+                LLMGuardrail(
+                    description=self.guardrail,
+                    llm=cast(BaseLLM, self.guardrail_llm or self.llm),
+                ),
             )
         elif callable(self.guardrail):
             guardrail_callable = self.guardrail

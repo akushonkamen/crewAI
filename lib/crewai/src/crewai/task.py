@@ -36,7 +36,12 @@ from pydantic.functional_serializers import PlainSerializer
 from pydantic_core import PydanticCustomError
 from typing_extensions import Self
 
-from crewai.agents.agent_builder.base_agent import BaseAgent, _resolve_agent
+from crewai.agents.agent_builder.base_agent import (
+    BaseAgent,
+    _resolve_agent,
+    _serialize_llm_ref,
+    _validate_llm_ref,
+)
 from crewai.context import reset_current_task_id, set_current_task_id
 from crewai.core.providers.content_processor import process_content
 from crewai.events.event_bus import crewai_event_bus
@@ -271,6 +276,17 @@ class Task(BaseModel):
         default=None,
         description="List of guardrails to validate task output before proceeding to next task. Also supports a single guardrail function or string description of a guardrail to validate task output before proceeding to next task",
     )
+    guardrail_llm: Annotated[
+        BaseLLM | None,
+        BeforeValidator(_validate_llm_ref),
+        PlainSerializer(_serialize_llm_ref, return_type=dict | None, when_used="json"),
+    ] = Field(
+        default=None,
+        description=(
+            "Optional dedicated LLM instance used to evaluate string guardrails "
+            "on this task; falls back to the agent's llm when not set."
+        ),
+    )
 
     max_retries: int | None = Field(
         default=None,
@@ -397,13 +413,14 @@ class Task(BaseModel):
             if self.agent is None:
                 raise ValueError("Agent is required to use LLMGuardrail")
 
-            if not isinstance(self.agent.llm, BaseLLM):
+            guardrail_llm = self.guardrail_llm or self.agent.llm
+            if not isinstance(guardrail_llm, BaseLLM):
                 raise ValueError(
                     "Agent must have a BaseLLM instance to use LLMGuardrail"
                 )
             self._guardrail = cast(
                 GuardrailCallable,
-                LLMGuardrail(description=self.guardrail, llm=self.agent.llm),
+                LLMGuardrail(description=self.guardrail, llm=guardrail_llm),
             )
 
         return self
@@ -424,7 +441,8 @@ class Task(BaseModel):
                                 )
                             from crewai.tasks.llm_guardrail import LLMGuardrail
 
-                            if not isinstance(self.agent.llm, BaseLLM):
+                            guardrail_llm = self.guardrail_llm or self.agent.llm
+                            if not isinstance(guardrail_llm, BaseLLM):
                                 raise ValueError(
                                     "Agent must have a BaseLLM instance to use LLMGuardrail"
                                 )
@@ -432,7 +450,7 @@ class Task(BaseModel):
                                 cast(
                                     GuardrailCallable,
                                     LLMGuardrail(
-                                        description=guardrail, llm=self.agent.llm
+                                        description=guardrail, llm=guardrail_llm
                                     ),
                                 )
                             )
@@ -448,7 +466,8 @@ class Task(BaseModel):
                         )
                     from crewai.tasks.llm_guardrail import LLMGuardrail
 
-                    if not isinstance(self.agent.llm, BaseLLM):
+                    guardrail_llm = self.guardrail_llm or self.agent.llm
+                    if not isinstance(guardrail_llm, BaseLLM):
                         raise ValueError(
                             "Agent must have a BaseLLM instance to use LLMGuardrail"
                         )
@@ -456,7 +475,7 @@ class Task(BaseModel):
                         cast(
                             GuardrailCallable,
                             LLMGuardrail(
-                                description=self.guardrails, llm=self.agent.llm
+                                description=self.guardrails, llm=guardrail_llm
                             ),
                         )
                     )

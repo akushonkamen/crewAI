@@ -21,6 +21,7 @@ import uuid
 from pydantic import (
     UUID4,
     BaseModel,
+    BeforeValidator,
     Field,
     PrivateAttr,
     ValidationError,
@@ -39,7 +40,11 @@ if TYPE_CHECKING:
 
 from crewai_core.printer import PRINTER
 
-from crewai.agents.agent_builder.base_agent import BaseAgent
+from crewai.agents.agent_builder.base_agent import (
+    BaseAgent,
+    _serialize_llm_ref,
+    _validate_llm_ref,
+)
 from crewai.agents.agent_builder.utilities.base_token_process import TokenProcess
 from crewai.agents.cache.cache_handler import CacheHandler
 from crewai.agents.parser import (
@@ -207,6 +212,8 @@ class LiteAgent(FlowTrackable, BaseModel):
         goal: The objective of the agent.
         backstory: The backstory of the agent.
         llm: The language model that will run the agent.
+        guardrail_llm: Optional dedicated LLM used to evaluate string
+            guardrails on this agent; falls back to ``llm`` when not set.
         tools: Tools at the agent's disposal.
         verbose: Whether the agent execution should be in verbose mode.
         max_iterations: Maximum number of iterations for tool usage.
@@ -275,6 +282,17 @@ class LiteAgent(FlowTrackable, BaseModel):
     )
     guardrail_max_retries: int = Field(
         default=3, description="Maximum number of retries when guardrail fails"
+    )
+    guardrail_llm: Annotated[
+        BaseLLM | None,
+        BeforeValidator(_validate_llm_ref),
+        PlainSerializer(_serialize_llm_ref, return_type=dict | None, when_used="json"),
+    ] = Field(
+        default=None,
+        description=(
+            "Optional dedicated LLM instance used to evaluate string guardrails "
+            "on this agent; falls back to the agent's llm when not set."
+        ),
     )
     a2a: (
         list[A2AConfig | A2AServerConfig | A2AClientConfig]
@@ -389,13 +407,16 @@ class LiteAgent(FlowTrackable, BaseModel):
         elif isinstance(self.guardrail, str):
             from crewai.tasks.llm_guardrail import LLMGuardrail
 
-            if not isinstance(self.llm, BaseLLM):
+            guardrail_llm = self.guardrail_llm or self.llm
+            if not isinstance(guardrail_llm, BaseLLM):
                 raise TypeError(
-                    f"Guardrail requires LLM instance of type BaseLLM, got {type(self.llm).__name__}"
+                    f"Guardrail requires LLM instance of type BaseLLM, got {type(guardrail_llm).__name__}"
                 )
             self._guardrail = cast(
                 GuardrailCallable,
-                cast(object, LLMGuardrail(description=self.guardrail, llm=self.llm)),
+                cast(
+                    object, LLMGuardrail(description=self.guardrail, llm=guardrail_llm)
+                ),
             )
 
         return self

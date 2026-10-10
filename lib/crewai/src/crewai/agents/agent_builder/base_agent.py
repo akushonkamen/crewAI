@@ -206,6 +206,8 @@ class BaseAgent(BaseModel, ABC, metaclass=AgentMeta):
         agent_executor: An instance of the CrewAgentExecutor class.
         i18n (I18N): Internationalization settings.
         llm (Any): Language model that will run the agent.
+        guardrail_llm (BaseLLM | None): Optional dedicated LLM used to evaluate
+            string guardrails on this agent; falls back to ``llm`` when not set.
         crew (Any): Crew to which the agent belongs.
 
         cache_handler ([CacheHandler]): An instance of the CacheHandler class.
@@ -316,6 +318,17 @@ class BaseAgent(BaseModel, ABC, metaclass=AgentMeta):
         BeforeValidator(_validate_llm_ref),
         PlainSerializer(_serialize_llm_ref, return_type=dict | None, when_used="json"),
     ] = Field(default=None, description="Language model that will run the agent.")
+    guardrail_llm: Annotated[
+        BaseLLM | None,
+        BeforeValidator(_validate_llm_ref),
+        PlainSerializer(_serialize_llm_ref, return_type=dict | None, when_used="json"),
+    ] = Field(
+        default=None,
+        description=(
+            "Optional dedicated LLM instance used to evaluate string guardrails "
+            "on this agent; falls back to the agent's llm when not set."
+        ),
+    )
     crew: Annotated[
         Crew | str | None,
         BeforeValidator(_validate_crew_ref),

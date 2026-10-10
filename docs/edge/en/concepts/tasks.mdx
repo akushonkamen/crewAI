@@ -65,6 +65,7 @@ crew = Crew(
 | **Guardrail** _(optional)_             | `guardrail`             | `Optional[Callable]`        | Function to validate task output before proceeding to next task.                                                |
 | **Guardrails** _(optional)_            | `guardrails`            | `Optional[List[Callable]]`  | List of guardrails to validate task output before proceeding to next task.                                      |
 | **Guardrail Max Retries** _(optional)_ | `guardrail_max_retries` | `Optional[int]`             | Maximum number of retries when guardrail validation fails. Defaults to 3.                                       |
+| **Guardrail LLM** _(optional)_         | `guardrail_llm`         | `Optional[BaseLLM]`         | Dedicated LLM used to evaluate string guardrails. Falls back to the agent's LLM when not set.                   |
 
 <Note type="warning" title="Deprecated: max_retries">
   The task attribute `max_retries` is deprecated and will be removed in v1.0.0.
@@ -385,6 +386,24 @@ research_task = Task(
     - Be written in a professional, academic tone
     - Avoid speculation or unverified claims
     """
+)
+```
+
+### Using a Dedicated Guardrail LLM
+
+By default, string guardrails run on the task's agent LLM: CrewAI builds the `LLMGuardrail` with the exact `BaseLLM` instance the agent uses, so the judge and the judged share one client, model, and provider route. To judge outputs with a different LLM instead — for example a cheaper model, or one isolated from the agent's failures and rate limits — set `guardrail_llm` on the `Task` (or on the `Agent`). When it is not set, nothing changes and the guardrail keeps using the agent's LLM.
+
+```python Code
+from crewai import LLM, Task
+
+cheap_judge = LLM(model="gpt-4o-mini")
+
+blog_task = Task(
+    description="Write a blog post about AI",
+    expected_output="A blog post under 200 words",
+    agent=blog_agent,
+    guardrail="The blog post must be under 200 words and contain no technical jargon",
+    guardrail_llm=cheap_judge  # Judge with a dedicated LLM instead of the agent's
 )
 ```
 

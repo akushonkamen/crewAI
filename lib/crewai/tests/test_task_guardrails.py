@@ -8,6 +8,8 @@ from crewai.events.event_types import (
     LLMGuardrailCompletedEvent,
     LLMGuardrailStartedEvent,
 )
+from crewai.lite_agent import LiteAgent
+from crewai.lite_agent_output import LiteAgentOutput
 from crewai.llm import LLM
 from crewai.tasks.hallucination_guardrail import HallucinationGuardrail
 from crewai.tasks.llm_guardrail import LLMGuardrail
@@ -779,3 +781,201 @@ def test_per_guardrail_independent_retry_tracking():
     assert call_counts["g3"] == 1
 
     assert "G3(1)" in result.raw
+
+
+# ---------------------------------------------------------------------------
+# guardrail_llm: dedicated judge LLM for string guardrails (issue #7764)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def judge_llm() -> LLM:
+    """A second LLM instance, distinct from the judged agent's own."""
+    return LLM(model="gpt-4o-mini")
+
+
+def _judged_agent(llm: LLM) -> Agent:
+    return Agent(
+        role="judged_agent",
+        goal="produce output",
+        backstory="I produce output.",
+        llm=llm,
+    )
+
+
+def test_string_guardrail_defaults_to_agent_llm_issue7764():
+    """Without guardrail_llm, string guardrails use the agent's exact LLM object.
+
+    Pins the backward-compatibility promise of #7764: when the new field is
+    left unset, the constructed LLMGuardrail must hold the very same BaseLLM
+    instance the judged agent holds (identity, not a copy) — exactly the
+    objects the pre-#7764 construction sites passed.
+    """
+    llm = LLM(model="gpt-4o")
+    agent = _judged_agent(llm)
+    task = Task(
+        description="Test task",
+        expected_output="Output",
+        agent=agent,
+        guardrail="must be JSON",
+    )
+
+    assert task.guardrail_llm is None
+    assert isinstance(task._guardrail, LLMGuardrail)
+    assert task._guardrail.llm is agent.llm
+    assert task._guardrail.llm is llm
+
+
+def test_string_guardrail_uses_guardrail_llm_override_issue7764(judge_llm):
+    """guardrail_llm passed alongside a string guardrail is used for judging."""
+    agent = _judged_agent(LLM(model="gpt-4o"))
+    task = Task(
+        description="Test task",
+        expected_output="Output",
+        agent=agent,
+        guardrail="must be JSON",
+        guardrail_llm=judge_llm,
+    )
+
+    assert task.guardrail_llm is judge_llm
+    assert isinstance(task._guardrail, LLMGuardrail)
+    assert task._guardrail.llm is judge_llm
+    assert task._guardrail.llm is not agent.llm
+
+
+@pytest.mark.parametrize(
+    "guardrails_kwarg",
+    [["must be JSON"], "must be JSON"],
+    ids=["list_of_strings", "single_string"],
+)
+def test_guardrails_honor_guardrail_llm_override(judge_llm, guardrails_kwarg):
+    """Both `guardrails` construction paths honor guardrail_llm (sites 2 and 3)."""
+    agent = _judged_agent(LLM(model="gpt-4o"))
+    task = Task(
+        description="Test task",
+        expected_output="Output",
+        agent=agent,
+        guardrails=guardrails_kwarg,
+        guardrail_llm=judge_llm,
+    )
+
+    assert len(task._guardrails) == 1
+    guardrail = task._guardrails[0]
+    assert isinstance(guardrail, LLMGuardrail)
+    assert guardrail.llm is judge_llm
+    assert guardrail.llm is not agent.llm
+
+
+@pytest.mark.parametrize(
+    "guardrails_kwarg",
+    [["must be JSON"], "must be JSON"],
+    ids=["list_of_strings", "single_string"],
+)
+def test_guardrails_fall_back_to_agent_llm_without_override(guardrails_kwarg):
+    """Both `guardrails` paths keep the agent's LLM when no override is set."""
+    llm = LLM(model="gpt-4o")
+    agent = _judged_agent(llm)
+    task = Task(
+        description="Test task",
+        expected_output="Output",
+        agent=agent,
+        guardrails=guardrails_kwarg,
+    )
+
+    assert len(task._guardrails) == 1
+    guardrail = task._guardrails[0]
+    assert isinstance(guardrail, LLMGuardrail)
+    assert guardrail.llm is agent.llm
+
+
+def test_agent_string_guardrail_falls_back_to_agent_llm_issue7764():
+    """Agent kickoff path (site 4): no override means the agent's own LLM."""
+    from crewai.utilities.guardrail import GuardrailResult
+
+    llm = LLM(model="gpt-4o")
+    agent = Agent(
+        role="judged_agent",
+        goal="produce output",
+        backstory="I produce output.",
+        llm=llm,
+        guardrail="must be JSON",
+    )
+    captured = {}
+
+    def fake_process_guardrail(**kwargs):
+        captured["guardrail"] = kwargs["guardrail"]
+        return GuardrailResult(success=True)
+
+    with patch(
+        "crewai.agent.core.process_guardrail", side_effect=fake_process_guardrail
+    ):
+        agent._process_kickoff_guardrail(
+            output=LiteAgentOutput(raw="some output", agent_role=agent.role),
+            executor=Mock(),
+            inputs={},
+        )
+
+    assert isinstance(captured["guardrail"], LLMGuardrail)
+    assert captured["guardrail"].llm is agent.llm
+
+
+def test_agent_string_guardrail_uses_guardrail_llm_override_issue7764(judge_llm):
+    """Agent kickoff path (site 4): guardrail_llm judges the agent's output."""
+    from crewai.utilities.guardrail import GuardrailResult
+
+    agent = Agent(
+        role="judged_agent",
+        goal="produce output",
+        backstory="I produce output.",
+        llm=LLM(model="gpt-4o"),
+        guardrail="must be JSON",
+        guardrail_llm=judge_llm,
+    )
+    captured = {}
+
+    def fake_process_guardrail(**kwargs):
+        captured["guardrail"] = kwargs["guardrail"]
+        return GuardrailResult(success=True)
+
+    with patch(
+        "crewai.agent.core.process_guardrail", side_effect=fake_process_guardrail
+    ):
+        agent._process_kickoff_guardrail(
+            output=LiteAgentOutput(raw="some output", agent_role=agent.role),
+            executor=Mock(),
+            inputs={},
+        )
+
+    assert isinstance(captured["guardrail"], LLMGuardrail)
+    assert captured["guardrail"].llm is judge_llm
+    assert captured["guardrail"].llm is not agent.llm
+
+
+def test_lite_agent_string_guardrail_falls_back_to_agent_llm_issue7764():
+    """LiteAgent path (site 5): no override means the agent's own LLM."""
+    llm = LLM(model="gpt-4o")
+    agent = LiteAgent(
+        role="judged_agent",
+        goal="produce output",
+        backstory="I produce output.",
+        llm=llm,
+        guardrail="must be JSON",
+    )
+
+    assert isinstance(agent._guardrail, LLMGuardrail)
+    assert agent._guardrail.llm is agent.llm
+
+
+def test_lite_agent_string_guardrail_uses_guardrail_llm_override_issue7764(judge_llm):
+    """LiteAgent path (site 5): guardrail_llm judges the agent's output."""
+    agent = LiteAgent(
+        role="judged_agent",
+        goal="produce output",
+        backstory="I produce output.",
+        llm=LLM(model="gpt-4o"),
+        guardrail="must be JSON",
+        guardrail_llm=judge_llm,
+    )
+
+    assert isinstance(agent._guardrail, LLMGuardrail)
+    assert agent._guardrail.llm is judge_llm
